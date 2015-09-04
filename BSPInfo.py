@@ -34,6 +34,61 @@ def expect(bsp, exp, act):
 	if act != exp:
 		raise RuntimeError("Error while parsing entities: expected '{:s}', but got '{:s}' at offset {:d}".format(exp, act, bsp.tell()))
 
+class vec3_t:
+	x = 0.0
+	y = 0.0
+	z = 0.0
+
+	def __init__(self, x = 0.0, y = 0.0, z = 0.0):
+		self.x = x
+		self.y = y
+		self.z = z
+
+	def parse(self, bsp):
+		self.x, self.y, self.z = struct.unpack("=fff", bsp.read(sizeof_vec3_t))
+		return self
+
+	def min(self, vec):
+		return vec3_t(min(self.x, vec.x), min(self.y, vec.y), min(self.z, vec.z))
+
+	def max(self, vec):
+		return vec3_t(max(self.x, vec.x), max(self.y, vec.y), max(self.z, vec.z))
+
+	def __str__(self):
+		return "({:g} {:g} {:g})".format(self.x, self.y, self.z)
+
+	def __abs__(a):
+		return vec3_t(abs(a.x), abs(a.y), abs(a.z))
+
+	def __pos__(a):
+		return vec3_t(+a.x, +a.y, +a.z)
+
+	def __neg__(a):
+		return vec3_t(-a.x, -a.y, -a.z)
+
+	def __add__(a, b):
+		return vec3_t(a.x + b.x, a.y + b.y, a.z + b.z)
+
+	def __sub__(a, b):
+		return vec3_t(a.x - b.x, a.y - b.y, a.z - b.z)
+
+class bbox3_t:
+	min = vec3_t()
+	max = vec3_t()
+
+	def __init__(self, min = vec3_t(), max = vec3_t()):
+		self.min = min.min(max)
+		self.max = max.max(min)
+
+	def merge(self, vec):
+		return bbox3_t(self.min.min(vec), self.max.max(vec))
+
+	def size(self):
+		return self.max - self.min
+
+	def __str__(self):
+		return "min{:s} max{:s} size{:s}".format(self.min, self.max, self.size())
+
 class dentry_t:
 	offset = None
 	size = None
@@ -105,7 +160,7 @@ class bspinfo:
 	size = None
 	directory = None
 	entities = []
-	entities_by_class = {}
+	bounds = bbox3_t()
 	
 	def __init__(self, path):
 		bspfile = io.open(sys.argv[1], "rb")
@@ -117,18 +172,24 @@ class bspinfo:
 		self.version   = struct.unpack("=l", bspfile.read(4))[0]
 		self.directory = bsp_directory(bspfile)
 		self.read_entities(bspfile)
+		self.compute_bounds(bspfile)
 
 	def read_entities(self, bsp):
 		bsp.seek(self.directory.entities.offset, 0)
 		skip_whitespace(bsp)
 		while (bsp.tell() < self.directory.entities.offset + self.directory.entities.size - 1):
-			entity = entity_t(bsp)
-			self.entities.append(entity)
-			if (entity.classname in self.entities_by_class):
-				self.entities_by_class[entity.classname] += 1
-			else:
-				self.entities_by_class[entity.classname] = 1
+			self.entities.append(entity_t(bsp))
 			skip_whitespace(bsp)
+
+	def compute_bounds(self, bsp):
+		bsp.seek(self.directory.vertices.offset, 0)
+		if (bsp.tell() < self.directory.vertices.offset + self.directory.vertices.size):
+			vertex = vec3_t().parse(bsp)
+			self.bounds.min = vertex
+			self.bounds.max = vertex
+			
+			while (bsp.tell() < self.directory.vertices.offset + self.directory.vertices.size):
+				self.bounds = self.bounds.merge(vec3_t().parse(bsp))
 
 	def num_entities(self):
 		return len(self.entities)
@@ -145,6 +206,16 @@ class bspinfo:
 	def num_nodes(self):
 		return self.directory.nodes.size / sizeof_node_t
 
+	def entity_stats(self):
+		stats = {}
+		for entity in self.entities:
+			if (entity.classname in stats):
+				stats[entity.classname] += 1
+			else:
+				stats[entity.classname] = 1
+		return stats
+
+
 def main():
 	check_usage()
 
@@ -157,12 +228,18 @@ def main():
 	print("Number of mip textures: {:d}".format(bsp.num_miptex()))
 	print("Number of vertices    : {:d}".format(bsp.num_vertices()))
 	print("Number of nodes       : {:d}".format(bsp.num_nodes()))
+
 	print("")
-	print("==== Entity Stats ====")
-	classnames = bsp.entities_by_class.keys()
+	print("==== Geometry Statistics ====")
+	print("  Total bounds        : {:s}".format(bsp.bounds))
+
+	print("")
+	print("==== Entity Statistics ====")
+	entity_stats = bsp.entity_stats()
+	classnames = entity_stats.keys()
 	classnames.sort()
 	for classname in classnames:
-		print("  {:>4} {:s}".format(bsp.entities_by_class[classname], classname))
+		print("  {:>4} {:s}".format(entity_stats[classname], classname))
 	# print("Number of textures: {:d}".format(num_miptex))
 
 if __name__ == "__main__":
