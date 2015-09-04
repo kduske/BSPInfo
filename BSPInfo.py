@@ -17,10 +17,13 @@ sizeof_ulong_t     = 4
 sizeof_float_t     = 4
 sizeof_scalar_t    = sizeof_float_t
 sizeof_vec3_t      = 3 * sizeof_scalar_t
+sizeof_bbox_t      = 2 * sizeof_vec3_t
 sizeof_plane_t     = sizeof_vec3_t + sizeof_scalar_t + sizeof_long_t
 sizeof_miptex_t    = 16 + 6 * sizeof_ulong_t
 sizeof_bboxshort_t = 2 * sizeof_short_t
 sizeof_node_t      = sizeof_long_t + 4 * sizeof_ushort_t + sizeof_bboxshort_t
+sizeof_surface_t   = 2 * sizeof_vec3_t + 2 * sizeof_scalar_t + 2 * sizeof_ulong_t
+sizeof_model_t     = sizeof_bbox_t + sizeof_vec3_t + 7 * sizeof_long_t
 
 def is_whitespace(str):
 	return 1 in [c in str for c in " \n\r\t\v"]
@@ -160,6 +163,7 @@ class bspinfo:
 	size = None
 	directory = None
 	entities = []
+	textures = []
 	bounds = bbox3_t()
 	
 	def __init__(self, path):
@@ -172,6 +176,8 @@ class bspinfo:
 		self.version   = struct.unpack("=l", bspfile.read(4))[0]
 		self.directory = bsp_directory(bspfile)
 		self.read_entities(bspfile)
+		self.read_textures(bspfile)
+		self.read_texture_usage(bspfile)
 		self.compute_bounds(bspfile)
 
 	def read_entities(self, bsp):
@@ -180,6 +186,26 @@ class bspinfo:
 		while (bsp.tell() < self.directory.entities.offset + self.directory.entities.size - 1):
 			self.entities.append(entity_t(bsp))
 			skip_whitespace(bsp)
+
+	def read_textures(self, bsp):
+		bsp.seek(self.directory.miptex.offset, 0)
+		numtex = struct.unpack("=l", bsp.read(4))[0]
+		offsets = []
+		for i in range(numtex):
+			offsets.append(struct.unpack("=l", bsp.read(4))[0])
+		for o in offsets:
+			bsp.seek(self.directory.miptex.offset + o, 0)
+			texture_name = struct.unpack("=16s", bsp.read(16))[0]
+			self.textures.append((texture_name, 0))
+
+	def read_texture_usage(self, bsp):
+		bsp.seek(self.directory.texinfo.offset, 0)
+		for i in range(self.num_surfaces()):
+			bsp.seek(sizeof_vec3_t + sizeof_scalar_t + sizeof_vec3_t + sizeof_scalar_t, 1)
+			texture_index = struct.unpack("=L", bsp.read(4))[0]
+			bsp.seek(sizeof_ulong_t, 1)
+			self.textures[texture_index] = (self.textures[texture_index][0], self.textures[texture_index][1] + 1)
+
 
 	def compute_bounds(self, bsp):
 		bsp.seek(self.directory.vertices.offset, 0)
@@ -198,13 +224,19 @@ class bspinfo:
 		return self.directory.planes.size / sizeof_plane_t
 
 	def num_miptex(self):
-		return 0
+		return len(self.textures)
 
 	def num_vertices(self):
 		return self.directory.vertices.size / sizeof_vec3_t
 
 	def num_nodes(self):
 		return self.directory.nodes.size / sizeof_node_t
+
+	def num_surfaces(self):
+		return self.directory.texinfo.size / sizeof_surface_t
+
+	def num_models(self):
+		return self.directory.models.size / sizeof_model_t
 
 	def entity_stats(self):
 		stats = {}
@@ -215,31 +247,49 @@ class bspinfo:
 				stats[entity.classname] = 1
 		return stats
 
+	def texture_stats(self):
+		stats = {}
+		for texturename, usage in self.textures:
+			stats[texturename] = usage
+		return stats
 
 def main():
 	check_usage()
 
 	bsp = bspinfo(sys.argv[0])
 
+	print("")
+	print("==== General Information ====")
 	print("Total BSP size        : {:d} bytes".format(bsp.size))
 	print("BSP version           : {:d}".format(bsp.version))
 	print("Number of entities    : {:d}".format(bsp.num_entities()))
 	print("Number of planes      : {:d}".format(bsp.num_planes()))
 	print("Number of mip textures: {:d}".format(bsp.num_miptex()))
+	print("Number of surfaces    : {:d}".format(bsp.num_surfaces()))
 	print("Number of vertices    : {:d}".format(bsp.num_vertices()))
 	print("Number of nodes       : {:d}".format(bsp.num_nodes()))
+	print("Number of models      : {:d}".format(bsp.num_nodes()))
 
 	print("")
-	print("==== Geometry Statistics ====")
-	print("  Total bounds        : {:s}".format(bsp.bounds))
+	print("==== Geometry ====")
+	print("Total bounds          : {:s}".format(bsp.bounds))
 
 	print("")
-	print("==== Entity Statistics ====")
+	print("==== Textures ====")
+	texture_stats = bsp.texture_stats()
+	texture_names = texture_stats.keys()
+	texture_names.sort()
+	for texture_name in texture_names:
+		print("{:5} {:16s}".format(texture_stats[texture_name], texture_name))
+
+
+	print("")
+	print("==== Entities ====")
 	entity_stats = bsp.entity_stats()
 	classnames = entity_stats.keys()
 	classnames.sort()
 	for classname in classnames:
-		print("  {:>4} {:s}".format(entity_stats[classname], classname))
+		print("{:5} {:s}".format(entity_stats[classname], classname))
 	# print("Number of textures: {:d}".format(num_miptex))
 
 if __name__ == "__main__":
