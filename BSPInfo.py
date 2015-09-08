@@ -33,6 +33,12 @@ def skip_whitespace(bsp):
 		pass
 	bsp.seek(-1, 1)
 
+def skip_comments(bsp):
+	while bsp.peek(2)[:2] == "//":
+		while bsp.read(1) != "\n":
+			pass
+		skip_whitespace(bsp)
+
 def expect(bsp, exp, act):
 	if act != exp:
 		raise RuntimeError("Error while parsing entities: expected '{:s}', but got '{:s}' at offset {:d}".format(exp, act, bsp.tell()))
@@ -106,6 +112,8 @@ class entity_t:
 
 	def __init__(self, bsp):
 		skip_whitespace(bsp)
+		skip_comments(bsp)
+		skip_comments(bsp)
 		expect(bsp, '{', bsp.read(1))
 		skip_whitespace(bsp)
 		while bsp.peek(1)[0] != '}':
