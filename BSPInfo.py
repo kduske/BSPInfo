@@ -191,7 +191,8 @@ class bspinfo:
 	def read_entities(self, bsp):
 		bsp.seek(self.directory.entities.offset, 0)
 		skip_whitespace(bsp)
-		while (bsp.tell() < self.directory.entities.offset + self.directory.entities.size - 1):
+		while (bsp.tell() < self.directory.entities.offset + self.directory.entities.size - 1 and
+			   bsp.peek()[0] != "\x00"):
 			self.entities.append(entity_t(bsp))
 			skip_whitespace(bsp)
 
